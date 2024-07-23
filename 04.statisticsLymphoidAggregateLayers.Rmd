@@ -1,0 +1,259 @@
+---
+title: "Lymphoid aggregate analysis per layer"
+creator: Michael Glinka
+affiliations: University of Edinburgh
+date: 2024.07.15
+---
+
+```{r}
+#(C) University of Edinburgh, Edinburgh, UK
+#(C) Heriot-Watt University, Edinburgh, UK
+#This program is free software; you can redistribute it and/or
+#modify it under the terms of the GNU General Public License
+#as published by the Free Software Foundation; either version 2
+#of the License, or (at your option) any later version.
+#This program is distributed in the hope that it will be
+#useful but WITHOUT ANY WARRANTY; without even the implied
+#warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+#PURPOSE.  See the GNU General Public License for more
+#details.
+#You should have received a copy of the GNU General Public
+#License along with this program; if not, write to the Free
+#Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+#Boston, MA  02110-1301, USA.
+```
+
+
+#### Transforming the data for R
+```{r}
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(rstatix)
+library(ggpubr)
+library(ggsignif)
+library(gridExtra)
+library(moments)
+library(broom)
+library(purrr)
+library(svglite)
+library(gghalves)
+```
+
+```{r}
+#Open the consolidated file
+data <- read.csv(".csv")
+```
+
+
+### Statistical analysis of the data
+
+##### Normality tests:
+```{r}
+#Print basic statistical summary for healthy and CD samples:
+data %>% filter(Status == "Healthy") %>% summary() -> Summary_Healthy
+data %>% filter(Status == "CD") %>% summary() -> Summary_CD
+write.csv(x=Summary_CD, file="Summary_CD.csv", row.names=FALSE)
+write.csv(x=Summary_Healthy, file="Summary_Healthy.csv", row.names=FALSE)
+rm(list=ls(pattern="Summary_"))
+```
+
+
+```{r}
+#Check the distribution for each variable - if the data contains all 0 for a condition, set up the dataframe values to NA (shapiro.wilk cannot handle 0's):
+distribution <- data %>% 
+  pivot_longer(3:14, names_to = "variable", values_to = "value") %>% 
+  group_by(variable, Status) %>% 
+  do({
+    values <- .$value
+    if (length(unique(values)) == 1) {
+      # All values are identical, skip shapiro.test and return NA for the p.value
+      data.frame(statistic = NA, p.value = NA)
+    } else {
+      # Values are not identical, perform the shapiro.test
+      tidy(shapiro.test(values))
+    }
+  }) %>% 
+  add_significance() %>%
+  ungroup() %>% 
+  select(-method)
+
+distribution <- distribution %>% arrange(Status)
+
+write.csv(x=distribution, file="Distribution_statistics-lymph-layers.csv", row.names=FALSE)
+rm(distribution)
+```
+
+##### Generate QQ and Density plots for normality assessment
+
+```{r}
+#Create Density and QQ plots for normality assessment:
+#Create temporary loop variable with the name of the columns (variables) that we are interested in mapping
+loop <- colnames(data[,3:14])
+#For loop that prints ggdensity and ggqqplots and saves them in the folder.
+#NOTE: print() function is crucial for the ggplot to actually generate the plots.
+for (i in loop){
+  print(ggdensity(data, x=i, add = "mean", rug=TRUE, color="Status", palette = c("#F8766D", "#00AFBB"), ylab="Density", xlab="") + 
+          theme(plot.title = element_text(hjust = 0.5)) + 
+          ggtitle(paste("Density plot for", i)) )
+  #NOTE: saving files requires folder graphs/normality/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/normality/Density_",i,".pdf",sep=""), device="pdf", dpi=300)
+  ggsave(filename=paste0("graphs/normality/Density_",i,".svg",sep=""), device="svg", dpi=300)
+    
+  print(ggqqplot(data, x=i, add = "qqline", rug=TRUE, color="Status", palette = c("#F8766D", "#00AFBB")) + 
+          theme(plot.title = element_text(hjust = 0.5)) + 
+          ggtitle(paste("QQ plot for", i)) )
+  #NOTE: saving files requires folder graphs/normality/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/normality/QQplot_",i,".pdf",sep=""), device="pdf", dpi=300)
+  ggsave(filename=paste0("graphs/normality/QQplot_",i,".svg",sep=""), device="svg", dpi=300)
+}
+#Remove the temporary variables i and loop from the list at the end of the generating the graphs
+rm(i, loop)
+```
+
+
+### Statistical analysis:
+##### QUANTITATIVE ANALYSIS:
+
+```{r}
+# List of columns to test - amend if needed
+columns_to_test <- c("Areaper_muc", "Count_muc", "Areaper_musmuc", "Count_musmuc", 
+                     "Areaper_sub", "Count_sub", "Areaper_mus", "Count_mus", 
+                     "Areaper_ser", "Count_ser")
+
+# Function to perform Kruskal-Wallis test and return tidy results
+perform_kruskal <- function(data, column) {
+  tidy(kruskal.test(as.formula(paste(column, "~ Status")), data = data)) %>% 
+    add_significance() %>% 
+    mutate(variable = column)
+}
+
+# Function to perform Dunn's test and return tidy results
+perform_dunn <- function(data, column) {
+  data %>% 
+    dunn_test(as.formula(paste(column, "~ Status")), p.adjust.method = "bonferroni") %>% 
+    mutate(variable = column)
+}
+
+# Initialize empty data frames for storing results
+combined_kruskal <- data.frame()
+combined_dunn <- data.frame()
+
+# Loop through each column and perform the tests
+for (column in columns_to_test) {
+  kruskal_result <- perform_kruskal(data, column)
+  dunn_result <- perform_dunn(data, column)
+  
+  combined_kruskal <- bind_rows(combined_kruskal, kruskal_result)
+  combined_dunn <- bind_rows(combined_dunn, dunn_result)
+}
+
+# Save the results to CSV files
+write.csv(combined_kruskal, "Statistics-Kruskal_CD3Lymph-layers.csv", row.names = FALSE)
+write.csv(combined_dunn, "Statistics-Dunn_CD3Lymph-layers.csv", row.names = FALSE)
+
+# Clean up
+rm(combined_kruskal, combined_dunn)
+```
+
+
+```{r}
+#Statistical analysis of the data - considering the non-normally distributed data, a non-parametric test will be used
+#the numeric columns are selected from 'data' dataframe and wilcox.test is used on the selected numeric columns and then mapped as dataframe through map_df and tidied up.
+#Unncessary information (method and alternative) are removed and significance added for easier visualisation
+data %>% mutate(Status=factor(Status, levels=c("Healthy","CD"))) -> data2
+wilcox_results <- data2 %>% 
+  select_if(is.numeric) %>% 
+  map_df(~ tidy(wilcox.test(. ~ data2$Status)), .id='var') %>% 
+  select(-method, -alternative) %>% 
+  add_significance()
+```
+
+```{r}
+#Save the test results into csv and OPTIONALLY delete the results from R
+write.csv(x=wilcox_results, file="Lymph-Statistics_Wilcoxon_test.csv", row.names=FALSE)
+rm(wilcox_results)
+```
+
+
+### PLOTS
+
+##### ORIGINAL INDIVIDUAL VIOLIN PLOTS
+```{r}
+#Create Violin plots for statistical assessment:
+#Create temporary loop variable with the name of the columns (variables) that we are interested in mapping
+loop <- colnames(data[,3:14])
+#For loop that prints ggplot (specifically geom_violin with statistical analysis) and saves them in the folder.
+#NOTE: print() function is crucial for the ggplot to actually generate the plots.
+for (i in loop){
+  print(ggplot(data=data, aes(x=factor(Status, level=c('Healthy', 'CD')), y=data[,i], fill=Status)) +
+          geom_violin() +
+          scale_fill_manual(values=c("CD"= "#F8766D","Healthy" = "#00BFC4")) +
+          geom_point(alpha=0.6, size=3) +
+          #ylim(0, 100) +
+          theme(axis.text.x=element_text(size=11,colour="black"), axis.text.y=element_text(colour="black"),axis.title.y=element_text(size=16, colour="black"), legend.position="none") +
+          stat_compare_means(method="wilcox.test", aes(label = ..p.signif..), size=9, label.x = 1.5, vjust=0.5) +
+          xlab("") +
+          ylab(paste(i)) )
+  #NOTE: saving files requires folder graphs/statistics/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/statistics/Stats_",i,".pdf",sep=""), device="pdf", width=4, dpi=300)
+  ggsave(filename=paste0("graphs/statistics/Stats_",i,".svg",sep=""), device="svg", width=4, dpi=300)
+    
+}
+#Remove the temporary variables i and loop from the list at the end of the generating the graphs
+rm(i, loop)
+```
+
+
+##### COMBINED VIOLIN PLOTS
+
+```{r}
+# Creates combined violin plot in one graph
+
+# Choose suffixes for the analysis. For lymphoid aggregates analysis where mucosa was excluded, the suffix "_muc" was removed.
+suffixes <- c("_muc", "_musmuc", "_sub", "_mus", "_ser")
+# Create a list of columns containing "Areaper_" and "Count_"
+my_comparisons <- rev(list(c("Healthy", "CD")))
+areaper_columns <- grep("Areaper_", colnames(data), value = TRUE)
+count_columns <- grep("Count_", colnames(data), value = TRUE)
+
+
+# Function to create and save combined plots
+create_and_save_combined_plot <- function(columns, prefix) {
+  # Create a long format data frame for the selected columns
+  combined_data <- data %>%
+    select(Status, all_of(columns)) %>%
+    pivot_longer(cols = columns, names_to = "variable", values_to = "value") %>%
+    mutate(variable = factor(variable, levels = paste0(prefix, suffixes)))
+
+  # Generate the combined plot
+  plot <- ggplot(combined_data, aes(x = factor(Status, level = c('Healthy', 'CD')), y = value, fill = Status)) +
+    geom_violin() +
+    scale_fill_manual(values = c("CD" = "#F8766D", "Healthy" = "#00BFC4")) +
+    geom_point(alpha = 0.6, size = 3) +
+    facet_wrap(~ variable, scales = "fixed", nrow = 1) +
+    theme(axis.text.x = element_text(size = 11, colour = "black"), 
+          axis.text.y = element_text(colour = "black"),
+          axis.title.y = element_text(size = 16, colour = "black"), 
+          legend.position = "none") +
+    xlab("") +
+    ylab("Value") +
+    geom_signif(comparisons = my_comparisons, textsize = 5, vjust = 0.1, 
+                map_signif_level = TRUE, step_increase = 0.1)
+  
+  # Save the combined plot - NOTE: requires folders graphs/statcombined/ to successfully create and save plots.
+  ggsave(filename = paste0("graphs/statcombined/Stats_", prefix, ".pdf"), plot = plot, device = "pdf", width = 12, height = 8, dpi = 300)
+  ggsave(filename = paste0("graphs/statcombined/Stats_", prefix, ".svg"), plot = plot, device = "svg", width = 12, height = 8, dpi = 300)
+}
+
+# Create and save combined plots for "Areaper_" and "Count_" columns
+areaper_columns <- grep("Areaper_", colnames(data), value = TRUE)
+count_columns <- grep("Count_", colnames(data), value = TRUE)
+
+create_and_save_combined_plot(areaper_columns, "Areaper")
+create_and_save_combined_plot(count_columns, "Count")
+
+# Remove temporary variables
+rm(areaper_columns, count_columns, my_comparisons)
+```

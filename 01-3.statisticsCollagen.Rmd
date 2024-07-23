@@ -1,0 +1,236 @@
+---
+title: "Collagen quantification - collagen, whitespace and other"
+creator: Michael Glinka
+affiliations: University of Edinburgh
+date: 2024.07.15
+---
+
+```{r}
+#(C) University of Edinburgh, Edinburgh, UK
+#(C) Heriot-Watt University, Edinburgh, UK
+#This program is free software; you can redistribute it and/or
+#modify it under the terms of the GNU General Public License
+#as published by the Free Software Foundation; either version 2
+#of the License, or (at your option) any later version.
+#This program is distributed in the hope that it will be
+#useful but WITHOUT ANY WARRANTY; without even the implied
+#warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+#PURPOSE.  See the GNU General Public License for more
+#details.
+#You should have received a copy of the GNU General Public
+#License along with this program; if not, write to the Free
+#Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+#Boston, MA  02110-1301, USA.
+```
+
+### Transforming the data for R
+```{r}
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(rstatix)
+library(ggpubr)
+library(ggsignif)
+library(gridExtra)
+library(moments)
+library(broom)
+library(purrr)
+library(svglite)
+```
+
+```{r}
+#Open the consolidated file
+df <- read.csv(".csv")
+#Create appropriate columns
+colnm <- c("Sample_ID", "Status", "Mucosa_col", "Mucosa_ws", "Mucosa_other", "Mucosa_area", "Mus_muc_col", "Mus_muc_ws", "Mus_muc_other", "Mus_muc_area", "Submucosa_col", "Submucosa_ws", "Submucosa_other", "Submucosa_area", "Muscularis_col","Muscularis_ws", "Muscularis_other", "Muscularis_area", "Serosa_col","Serosa_ws", "Serosa_other", "Serosa_area")
+```
+
+```{r}
+#Create new dataframe and assign the new column names. ncol length is equal to the number of terms in the colnm and nrow is set to the number of unique Sample IDs in Image column
+data <- data.frame(matrix(ncol=length(colnm), nrow=length(unique(df$Image))))
+colnames(data) <- colnm
+#Extract the unique Sample_IDs of the samples and add them to data dataframe. Put the health status in Status column
+data$Sample_ID <- unique(df$Image)
+data %>% separate(Sample_ID, c("Sample_ID", "Status"), sep="_") -> data
+
+```
+
+```{r}
+#To extract data that contains values only for specific region
+#Change the data class from logical to numeric for the new dataframe - necessary for filter() and select() in next step
+data[, 3:22] <- sapply(data[, 3:22], as.numeric)
+#Extract data for each region and add to specific corresponding columns
+df %>% filter(Region == "Mucosa") %>% select(3:6) -> data[, 3:6]
+df %>% filter(Region == "Muscularis mucosa") %>% select(3:6) -> data[, 7:10]
+df %>% filter(Region == "Submucosa") %>% select(3:6) -> data[, 11:14] 
+df %>% filter(Region == "Muscularis externa") %>% select(3:6) -> data[, 15:18] 
+df %>% filter(Region == "Serosa") %>% select(3:6) -> data[, 19:22]
+data <- data[order(data[,2]),]
+dataoriginal <- data[order(data[,2]),]
+rm(colnm)
+```
+
+```{r}
+#Write the new data into CSV - row.names=FALSE prevents additional column from being created with row index values
+write.csv(x=dataoriginal, file="Collagen_triple-rearranged-original.csv", row.names=FALSE)
+rm(dataoriginal)
+```
+
+##### Calculate percentages based on total area and area of each region.
+```{r}
+# Calculate total area for each sample
+area_columns <- grep("_area", names(data), value = TRUE)  # Identify columns with "_area" suffix
+data$total_area <- rowSums(data[, area_columns])  # Calculate total area by summing values in "_area" columns
+
+# Function to calculate percentage area for a given set of columns based on total area
+calculate_percentage <- function(data, columns) {
+  for (col in columns) {
+    if (!grepl("_perc$", col) && !grepl("_layerperc$", col)) {  # Check if column name doesn't end with "_perc" or "_layerperc"
+      perc_col <- paste0(col, "_perc")  # Create new column name for percentage
+      data[[perc_col]] <- data[[col]] / data$total_area * 100  # Calculate percentage area and assign to new column
+    }
+  }
+  return(data)
+}
+
+# Calculate percentage area for collagen "_col", whitespace "_ws", other "_other", and area "_area" 
+data <- calculate_percentage(data, grep("_col", names(data), value = TRUE))  # Calculate percentage for columns with "_col" suffix
+data <- calculate_percentage(data, grep("_ws", names(data), value = TRUE))  # Calculate percentage for columns with "_ws" suffix
+data <- calculate_percentage(data, grep("_other", names(data), value = TRUE))  # Calculate percentage for columns with "_other" suffix
+data <- calculate_percentage(data, grep("_area", names(data), value = TRUE))  # Calculate percentage for columns with "_area" suffix
+
+# Remove the unnecessary column named "total_area_perc"
+data <- subset(data, select = -total_area_perc)
+
+# Function to calculate percentage based on prefix columns and corresponding area column
+calculate_layer_percentage <- function(data, prefix) {
+  area_col <- paste0(prefix, "_area")  # Identify area column for the specified prefix
+  prefix_cols <- grep(prefix, names(data), value = TRUE)  # Identify columns with specified prefix
+  
+  for (layer_col in prefix_cols) {
+    if (!grepl("_perc$", layer_col) && !grepl("_layerperc$", layer_col)) {  # Check if column name doesn't end with "_perc" or "_layerperc"
+      perc_col <- paste0(layer_col, "_layerperc")  # Create new column name for layer percentage
+      if (layer_col != area_col) { # Check if the current column is not the area column itself
+        data[[perc_col]] <- (data[[layer_col]] / data[[area_col]]) * 100  # Calculate layer percentage and assign to new column
+      }
+    }
+  }
+  return(data)
+}
+
+# Calculate layer percentage for each specified prefix
+data <- calculate_layer_percentage(data, "Mucosa")
+data <- calculate_layer_percentage(data, "Submucosa")
+data <- calculate_layer_percentage(data, "Mus_muc")
+data <- calculate_layer_percentage(data, "Muscularis")
+data <- calculate_layer_percentage(data, "Serosa")
+
+```
+
+```{r}
+#Write the new data into CSV - row.names=FALSE prevents additional column from being created with row index values
+write.csv(x=data, file="Collagen_triple-rearranged-all.csv", row.names=FALSE)
+```
+
+
+### Statistical analysis of the data
+
+##### Normality tests:
+```{r}
+#Print basic statistical summary for healthy and CD samples:
+data %>% filter(Status == "Healthy") %>% summary() -> Summary_Healthy
+data %>% filter(Status == "CD") %>% summary() -> Summary_CD
+write.csv(x=Summary_CD, file="Summary_CD.csv", row.names=FALSE)
+write.csv(x=Summary_Healthy, file="Summary_Healthy.csv", row.names=FALSE)
+```
+
+```{r}
+#Check the distribution for each variable:
+distribution <- data %>% 
+  pivot_longer(3:58, names_to = "variable", values_to = "value") %>% 
+  group_by(variable, Status)  %>% 
+  do(tidy(shapiro.test(.$value))) %>% 
+  add_significance() %>%
+  ungroup() %>% 
+  select(-method)
+distribution <- distribution %>% arrange(Status)
+
+write.csv(x=distribution, file="Collagen_triple-Distribution_statistics.csv", row.names=FALSE)
+rm(distribution)
+```
+
+```{r}
+#Create Density and QQ plots for normality assessment:
+#Create temporary loop variable with the name of the columns (variables) that we are interested in mapping
+data %>% mutate(Status=factor(Status, levels=c("Healthy","CD"))) -> data2
+loop <- colnames(data2[,3:58])
+#For loop that prints ggdensity and ggqqplots and saves them in the folder.
+#NOTE: print() function is crucial for the ggplot to actually generate the plots.
+for (i in loop){
+  print(ggdensity(data2, x=i, add = "mean", rug=TRUE, color="Status", palette = c("#F8766D", "#00AFBB"), ylab="Density", xlab="") +           theme(plot.title = element_text(hjust = 0.5)) + 
+          ggtitle(paste("Density plot for", i)) )
+  #NOTE: saving files requires folder graphs/normality/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/normality/Density_",i,".pdf",sep=""), device="pdf", dpi=300) #Here set your destination output folders
+  ggsave(filename=paste0("graphs/normality/Density_",i,".svg",sep=""), device="svg", dpi=300) #Here set your destination output folders
+    
+  print(ggqqplot(data2, x=i, add = "qqline", rug=TRUE, color="Status", palette = c("#F8766D", "#00AFBB")) + 
+          theme(plot.title = element_text(hjust = 0.5)) + 
+          ggtitle(paste("QQ plot for", i)) )
+  #NOTE: saving files requires folder graphs/normality/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/normality/QQplot_",i,".pdf",sep=""), device="pdf", dpi=300) #Here set your destination output folders
+  ggsave(filename=paste0("graphs/normality/QQplot_",i,".svg",sep=""), device="svg", dpi=300) #Here set your destination output folders
+}
+#Remove the temporary variables i and loop from the list at the end of the generating the graphs
+rm(i, loop)
+```
+
+
+##### Significance analysis
+
+```{r}
+#Statistical analysis of the data - considering the non-normally distributed data, a non-parametric test will be used
+#the numeric columns are selected from 'data' dataframe and wilcox.test is used on the selected numeric columns and then mapped as dataframe through map_df and tidied up.
+#Unncessary information (method and alternative) are removed and significance added for easier visualisation
+wilcox_results <- data2 %>% 
+  select_if(is.numeric) %>% 
+  map_df(~ tidy(wilcox.test(. ~ data2$Status)), .id='var') %>% 
+  select(-method, -alternative) %>% 
+  add_significance()
+```
+
+```{r}
+#Save the test results into csv and OPTIONALLY delete the results from R
+write.csv(x=wilcox_results, file="Collagen_triple-Statistics_Wilcoxon_test.csv", row.names=FALSE)
+rm(wilcox_results)
+```
+
+#### Generate graphs to visualise the data
+##### Raw value y-axis max graphs:
+```{r}
+#Create Violin plots for statistical assessment:
+#Mutate the data to specify the order (levels) of dataframe, so that healthy is on the left and CD is on the right
+#data %>% mutate(Status=factor(Status, levels=c("Healthy","CD"))) -> data2
+
+#Create temporary loop variable with the name of the columns (variables) that we are interested in mapping
+loop <- colnames(data2[,3:58])
+#For loop that prints ggplot (specifically geom_violin with statistical analysis) and saves them in the folder.
+#NOTE: print() function is crucial for the ggplot to actually generate the plots.
+for (i in loop){
+  print(ggplot(data=data2, aes(x=Status, y=data[,i], fill=Status)) +
+          geom_violin() +
+          scale_fill_manual(values=c("CD"= "#F8766D","Healthy" = "#00BFC4")) +
+          geom_point(alpha=0.6, size=3) +
+          theme(axis.text.x=element_text(size=11,colour="black"), axis.text.y=element_text(colour="black"),axis.title.y=element_text(size=16, colour="black"), legend.position="none") +
+          stat_compare_means(method="wilcox.test", aes(label = ..p.signif..), size=7, label.x = 1.5, vjust=0.5) +
+          ylim(c(0, NA)) + #set NA to 100 for 100% limit graphs - change output of ggsave though to not to overwrite previous results.
+          xlab("") +
+          ylab(paste(i)) )
+  #NOTE: saving files requires folder graphs/statistics/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/statistics/Stats_",i,".pdf",sep=""), width=4, device="pdf", dpi=300) #If Y limit was set to 100 for %, change folder otherwise overwrites.
+  ggsave(filename=paste0("graphs/statistics/Stats_",i,".svg",sep=""), width=4, device="svg", dpi=300) #If Y limit was set to 100 for %, change folder otherwise overwrites.
+    
+}
+#Remove the temporary variables i and loop from the list at the end of the generating the graphs
+rm(i, loop)
+```

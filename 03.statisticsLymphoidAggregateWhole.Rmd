@@ -1,0 +1,164 @@
+---
+title: "Lymphoid aggregate analysis"
+creator: Michael Glinka
+affiliations: University of Edinburgh
+date: 2024.07.15
+---
+
+```{r}
+#(C) University of Edinburgh, Edinburgh, UK
+#(C) Heriot-Watt University, Edinburgh, UK
+#This program is free software; you can redistribute it and/or
+#modify it under the terms of the GNU General Public License
+#as published by the Free Software Foundation; either version 2
+#of the License, or (at your option) any later version.
+#This program is distributed in the hope that it will be
+#useful but WITHOUT ANY WARRANTY; without even the implied
+#warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+#PURPOSE.  See the GNU General Public License for more
+#details.
+#You should have received a copy of the GNU General Public
+#License along with this program; if not, write to the Free
+#Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+#Boston, MA  02110-1301, USA.
+```
+
+
+### Transforming the data for R
+```{r}
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(rstatix)
+library(ggpubr)
+library(ggsignif)
+library(gridExtra)
+library(moments)
+library(broom)
+library(purrr)
+library(svglite)
+```
+
+```{r}
+#Open the consolidated file
+data <- read.csv(".csv")
+
+```
+
+
+### Statistical analysis of the data
+
+##### Normality tests:
+```{r}
+#Print basic statistical summary for healthy and CD samples:
+data %>% filter(Status == "Healthy") %>% summary() -> Summary_Healthy
+data %>% filter(Status == "CD") %>% summary() -> Summary_CD
+data %>% filter(Status == "MALT") %>% summary() -> Summary_MALT
+data %>% filter(Status == "NOMALT") %>% summary() -> Summary_MALT
+write.csv(x=Summary_CD, file="Summary_CD.csv", row.names=FALSE)
+write.csv(x=Summary_Healthy, file="Summary_Healthy.csv", row.names=FALSE)
+write.csv(x=Summary_MALT, file="Summary_MALT.csv", row.names=FALSE)
+write.csv(x=Summary_MALT, file="Summary_NOMALT.csv", row.names=FALSE)
+rm(list=ls(pattern="Summary_"))
+```
+
+```{r}
+#Check the distribution for each variable:
+distribution <- data %>% 
+  pivot_longer(3:4, names_to = "variable", values_to = "value") %>% 
+  group_by(variable, Status)  %>% 
+  do(tidy(shapiro.test(.$value))) %>% 
+  add_significance() %>%
+  ungroup() %>% 
+  select(-method)
+distribution <- distribution %>% arrange(Status)
+                                    
+
+write.csv(x=distribution, file="Distribution_statistics-lymphMALT-all.csv", row.names=FALSE)
+rm(distribution)
+
+```
+
+##### Generate QQ and Density plots for normality assessment
+
+```{r}
+#Create Density and QQ plots for normality assessment:
+#Create temporary loop variable with the name of the columns (variables) that we are interested in mapping
+loop <- colnames(data[,3:4])
+#For loop that prints ggdensity and ggqqplots and saves them in the folder.
+#NOTE: print() function is crucial for the ggplot to actually generate the plots.
+for (i in loop){
+  print(ggdensity(data, x=i, add = "mean", rug=TRUE, color="Status", palette = c("#F8766D", "#00AFBB","#dca72b","#6bb823"), ylab="Density", xlab="") + 
+          theme(plot.title = element_text(hjust = 0.5)) + 
+          ggtitle(paste("Density plot for", i)) )
+  #NOTE: saving files requires folder graphs/normality/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/normality/Density_",i,".pdf",sep=""), device="pdf", dpi=300)
+  ggsave(filename=paste0("graphs/normality/Density_",i,".svg",sep=""), device="svg", dpi=300)
+    
+  print(ggqqplot(data, x=i, add = "qqline", rug=TRUE, color="Status", palette = c("#F8766D", "#00AFBB", "#dca72b", "#6bb823")) + 
+          theme(plot.title = element_text(hjust = 0.5)) + 
+          ggtitle(paste("QQ plot for", i)) )
+  #NOTE: saving files requires folder graphs/normality/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/normality/QQplot_",i,".pdf",sep=""), device="pdf", dpi=300)
+  ggsave(filename=paste0("graphs/normality/QQplot_",i,".svg",sep=""), device="svg", dpi=300)
+}
+#Remove the temporary variables i and loop from the list at the end of the generating the graphs
+rm(i, loop)
+```
+
+
+### Statistical analysis:
+
+```{r}
+# Perform Kruskal-Wallis test
+kruskal_area <- tidy(kruskal.test(area_perc ~ Status, data = data)) %>% add_significance()
+kruskal_lymph <- tidy(kruskal.test(lymph_count ~ Status, data = data)) %>% add_significance()
+combined_kruskal <- bind_rows(kruskal_area, kruskal_lymph)
+write.csv(combined_kruskal, "Statistics-Kruskal_LymphMALT-all.csv", row.names = FALSE)
+rm(kruskal_area,kruskal_lymph,combined_kruskal)
+
+# Perform post-hoc test (Dunn's test)
+dunn_area <- data %>% dunn_test(area_perc ~ Status, p.adjust.method = "bonferroni")
+dunn_lymph <- data %>% dunn_test(lymph_count ~ Status, p.adjust.method = "bonferroni")
+combined_dunn <- bind_rows(dunn_area, dunn_lymph)
+
+write.csv(combined_dunn, "Statistics-Dunn_LymphMALT-all.csv", row.names = FALSE)
+rm(dunn_area,dunn_lymph,combined_dunn)
+```
+
+
+```{r}
+#Create Violin plots for statistical assessment:
+#Create temporary loop variable with the name of the columns (variables) that we are interested in mapping
+loop <- colnames(data[,3:4])
+my_comparisons <- rev(list(c("NOMALT", "MALT"), c("Healthy", "CD"), c("MALT", "CD"), c("NOMALT", "CD")))
+
+
+# For loop that prints ggplot (specifically geom_violin with statistical analysis) and saves them in the folder.
+# NOTE: print() function is crucial for the ggplot to actually generate the plots.
+for (i in loop) {
+  # Generate the plot
+  print(ggplot(data = data, aes(x = factor(Status, level = c('NOMALT', 'MALT', 'Healthy', 'CD')), y = .data[[i]], fill = Status)) +
+    geom_violin() +
+    scale_fill_manual(values = c("CD" = "#F8766D", "Healthy" = "#00BFC4", "MALT" = "#dca72b", "NOMALT" = "#6bb823")) +
+    geom_point(alpha = 0.6, size = 3) +
+    theme(axis.text.x = element_text(size = 11, colour = "black"), 
+          axis.text.y = element_text(colour = "black"),
+          axis.title.y = element_text(size = 16, colour = "black"), 
+          legend.position = "none") +
+    xlab("") +
+    ylab(i) +
+    geom_signif(comparisons = my_comparisons, textsize = 5, vjust = 0.1, 
+                map_signif_level = TRUE, step_increase = 0.1)) #NOTE: The final graphs were manually edited to incorporate the Dunn Test corrected with boneferroni as the geom_signiff doesn't allow for corrections.
+
+  #NOTE: saving files requires folder graphs/normality/ in the same location as the .rmd file.
+  ggsave(filename=paste0("graphs/statistics/Stats_",i,".pdf",sep=""), device="pdf", width=4, dpi=300)
+  ggsave(filename=paste0("graphs/statistics/Stats_",i,".svg",sep=""), device="svg", width=4, dpi=300)
+}
+
+# Remove the temporary variables i and loop from the list at the end of the generating the graphs
+rm(i, loop, my_comparisons)
+```
+
+
