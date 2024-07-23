@@ -3,6 +3,7 @@ title: "Collagen quantification - collagen, whitespace and other"
 creator: Michael Glinka
 affiliations: University of Edinburgh
 date: 2024.07.15
+output: github_document
 ---
 
 ```{r}
