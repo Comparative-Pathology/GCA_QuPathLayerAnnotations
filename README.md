@@ -1,6 +1,16 @@
 # GCA_QuPathLayerAnnotations
 A repo for Python, Groovy (Java) and R code used in analysis of data extracted from QuPath annotations, pixel classifiers and in-built positive cell and density mapping functions. 
 
+## Necessary software
+In order to run the scripts, the software/packages below are necessary:
+| Software/Package | File type |
+| --- | --- |
+| Python 3.0 | .py |
+| QuPath (v0.5 or above) | .groovy |
+| R Studio (v2023.12.1 Build 402 or above) with R-4.3.3 (or above) | .Rmd |
+
+The .Rmd files are Markdown files with embedded R-script separated by blocks to allow easier troubleshooting.
+
 ## Scripts
 NOTE: Numbers before each script file correspond to the raw data that the file generated. Files with number '00' are general files used within QuPath software or QuPath project folder in order to perform certain scripted functions.
 
